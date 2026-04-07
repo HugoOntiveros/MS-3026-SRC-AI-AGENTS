@@ -3,8 +3,11 @@ import asyncio
 from pathlib import Path
 
 # Add references
-
-
+from dotenv import load_dotenv
+from azure.identity.aio import DefaultAzureCredential
+from semantic_kernel.agents import AzureAIAgent, AzureAIAgentSettings, AzureAIAgentThread
+from semantic_kernel.functions import kernel_function
+from typing import Annotated
 
 async def main():
     # Clear the console
@@ -25,14 +28,65 @@ async def main():
 async def process_expenses_data(prompt, expenses_data):
 
     # Create a client and initialize an agent with the tool and instructions
-    
+    load_dotenv()
+    ai_agent_settings = AzureAIAgentSettings()
+
+    async with (
+        DefaultAzureCredential(
+            exclude_environment_credential = True,
+            exclude_managed_identity_credentia = True) as creds,
+        AzureAIAgent.create_client(
+            credential = creds
+        ) as project_client,
+    ):
+
+        expenses_agent_def = await project_client.agents.create_agent(
+            model = ai_agent_settings.model_deployment_name,
+            name = "expenses-agent",
+            instructions = """You are an AI assistant for expense claim submission.
+                              When an user submits expenses data and requests an expense claim, use the
+                              Then confirm to the user that you've done so.
+                           """
+        )
+
+        expenses_agent = AzureAIAgent(
+            client = project_client,
+            definition = expenses_agent_def,
+            plugins = [EmailPlugin()]
+        )
+
 
         # Use the agent to process the expenses data    
-
-
+        # If no thread is provided, anew thread will be
+        # created and returned with the initial response
+        thread: AzureAIAgentThread | None = None
+        try:
+            # Add the input prompt to a list of messages to be submitted
+            prompt_messages = [f"{prompt}: {expenses_data}"]
+            # Invoke the agent for the specified thread with the messages
+            response = await expenses_agent.get_response(prompt_messages, thread = thread)
+            # Display the response
+            print(f"\n# {response.name}:\n{response}")
+        except Exception as e:
+            # Something went wrong
+            print(e)
+        finally:
+            # Cleanup: delete the thread and agent
+            await thread.delete() if thread else None
+            await project_client.agents.delete_agent(expenses_agent.id)
 
 # Create a tool function for the email functionality
+class EmailPlugin:
+    """A plugin to simulate email functionality."""
 
+    @kernel_function(description = "Sends an email.")
+    def send_email(self,
+                   to: Annotated[str, "Who to send the email to"],
+                   subject: Annotated[str, "The subject of the email."],
+                   body: Annotated[str, "The text body of the email."]):
+        print("\nTo:", to)
+        print("\nSubject", subject)
+        print(body, "\n")
 
 
 if __name__ == "__main__":
